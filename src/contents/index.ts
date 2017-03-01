@@ -204,14 +204,160 @@ namespace Contents {
   }
 
   /**
+   * A model for a mounted filesystem.
+   */
+  export
+  interface IDriveModel {
+    /**
+     * The base url of the drive.
+     * Used by an `IContentsManager` to determine the drive
+     * to which to dispatch a request.
+     */
+    baseUrl: string;
+
+    /**
+     * The name of the drive shown in the user interface.
+     */
+    displayName: string;
+
+    /**
+     * A signal emitted when a file operation takes place.
+     */
+    fileChanged: ISignal<IDriveModel, IChangedArgs>;
+
+    /**
+     * Get a file or directory.
+     *
+     * @param path: The path to the file.
+     *
+     * @param options: The options used to fetch the file.
+     *
+     * @returns A promise which resolves with the file content.
+     */
+    get(path: string, options?: IFetchOptions): Promise<IModel>;
+
+    /**
+     * Get an encoded download url given a file path.
+     *
+     * @param A promise which resolves with the absolute POSIX
+     *   file path on the server.
+     */
+    getDownloadUrl(path: string): Promise<string>;
+
+    /**
+     * Create a new untitled file or directory in the specified directory path.
+     *
+     * @param options: The options used to create the file.
+     *
+     * @returns A promise which resolves with the created file content when the
+     *    file is created.
+     */
+    newUntitled(options?: ICreateOptions): Promise<IModel>;
+
+    /**
+     * Delete a file.
+     *
+     * @param path - The path to the file.
+     *
+     * @returns A promise which resolves when the file is deleted.
+     */
+    delete(path: string): Promise<void>;
+
+    /**
+     * Rename a file or directory.
+     *
+     * @param path - The original file path.
+     *
+     * @param newPath - The new file path.
+     *
+     * @returns A promise which resolves with the new file content model when the
+     *   file is renamed.
+     */
+    rename(path: string, newPath: string): Promise<IModel>;
+
+    /**
+     * Save a file.
+     *
+     * @param path - The desired file path.
+     *
+     * @param options - Optional overrrides to the model.
+     *
+     * @returns A promise which resolves with the file content model when the
+     *   file is saved.
+     */
+    save(path: string, options?: IModel): Promise<IModel>;
+
+    /**
+     * Copy a file into a given directory.
+     *
+     * @param path - The original file path.
+     *
+     * @param toDir - The destination directory path.
+     *
+     * @returns A promise which resolves with the new content model when the
+     *  file is copied.
+     */
+    copy(path: string, toDir: string): Promise<IModel>;
+
+    /**
+     * Create a checkpoint for a file.
+     *
+     * @param path - The path of the file.
+     *
+     * @returns A promise which resolves with the new checkpoint model when the
+     *   checkpoint is created.
+     */
+    createCheckpoint(path: string): Promise<IModel>;
+
+    /**
+     * List available checkpoints for a file.
+     *
+     * @param path - The path of the file.
+     *
+     * @returns A promise which resolves with a list of checkpoint models for
+     *    the file.
+     */
+    listCheckpoints(path: string): Promise<ICheckpointModel[]>;
+
+    /**
+     * Restore a file to a known checkpoint state.
+     *
+     * @param path - The path of the file.
+     *
+     * @param checkpointID - The id of the checkpoint to restore.
+     *
+     * @returns A promise which resolves when the checkpoint is restored.
+     */
+    restoreCheckpoint(path: string, checkpointID: string): Promise<void>;
+
+    /**
+     * Delete a checkpoint for a file.
+     *
+     * @param path - The path of the file.
+     *
+     * @param checkpointID - The id of the checkpoint to delete.
+     *
+     * @returns A promise which resolves when the checkpoint is deleted.
+     */
+    deleteCheckpoint(path: string, checkpointID: string): Promise<void>;
+
+    /**
+     * Optional default settings for ajax requests, if applicable.
+     */
+    ajaxSettings?: IAjaxSettings;
+  }
+
+
+  /**
    * The interface for a contents manager.
    */
   export
   interface IManager extends IDisposable {
+
     /**
-     * The base url of the manager.
+     * The list of drives currently registered with the manager.
      */
-    readonly baseUrl: string;
+    readonly drives: IDriveModel[];
 
     /**
      * A signal emitted when a file operation takes place.
@@ -335,22 +481,33 @@ namespace Contents {
     deleteCheckpoint(path: string, checkpointID: string): Promise<void>;
 
     /**
-     * Optional default settings for ajax requests, if applicable.
+     * Given a path, determine which drive should receive requests.
+     *
+     * @param path - the path of the file.
+     *
+     * @returns the drive that matches the path.
      */
-    ajaxSettings?: IAjaxSettings;
+    resolveDrive(path: string): IDriveModel;
+
+    /**
+     * Add a drive to the list of mounted filesystems.
+     *
+     * @param drive - the drive to add.
+     */
+    addDrive(drive: IDriveModel): void;
   }
 }
 
 
 /**
- * A contents manager that passes file operations to the server.
+ * A drive manager that passes file operations to the server.
  *
  * This includes checkpointing with the normal file operations.
  */
 export
-class ContentsManager implements Contents.IManager {
+class DefaultDrive implements Contents.IDriveModel {
   /**
-   * Construct a new contents manager object.
+   * Construct a new drive model object.
    *
    * @param options - The options used to initialize the object.
    */
@@ -358,6 +515,11 @@ class ContentsManager implements Contents.IManager {
     this._baseUrl = options.baseUrl || utils.getBaseUrl();
     this._ajaxSettings = utils.ajaxSettingsWithToken(options.ajaxSettings, options.token);
   }
+
+  /**
+   * Display name for the default drive.
+   */
+  readonly displayName: string = 'Local';
 
   /**
    * A signal emitted when a file operation takes place.
@@ -392,13 +554,13 @@ class ContentsManager implements Contents.IManager {
   }
 
   /**
-   * Get a copy of the default ajax settings for the contents manager.
+   * Get a copy of the default ajax settings for the drive model.
    */
   get ajaxSettings(): IAjaxSettings {
     return utils.copy(this._ajaxSettings);
   }
   /**
-   * Set the default ajax settings for the contents manager.
+   * Set the default ajax settings for the drive model.
    */
   set ajaxSettings(value: IAjaxSettings) {
     this._ajaxSettings = utils.copy(value);
@@ -801,102 +963,351 @@ class ContentsManager implements Contents.IManager {
   private _fileChanged = new Signal<this, Contents.IChangedArgs>(this);
 }
 
-
 /**
- * A namespace for ContentsManager statics.
+ * A contents manager that passes file operations to the appropriate
+ * drive manager, based on the base URL of a path.
  */
 export
+class ContentsManager implements Contents.IManager {
+  /**
+   * Construct a new contents manager object.
+   *
+   * @param options - The options used to initialize the object.
+   */
+  constructor(defaultDrive: Contents.IDriveModel) {
+    this._defaultDrive = defaultDrive;
+    this.addDrive(this._defaultDrive);
+  }
+
+  /**
+   * A signal emitted when a file operation takes place.
+   */
+  get fileChanged(): ISignal<this, Contents.IChangedArgs> {
+    return this._fileChanged;
+  }
+
+  /**
+   * Test whether the manager has been disposed.
+   */
+  get isDisposed(): boolean {
+    return this._isDisposed;
+  }
+
+  /**
+   * Get a list of the drives registered with the contents manager.
+   */
+  get drives(): Contents.IDriveModel[] {
+    return this._drives;
+  }
+
+  /**
+   * Dispose of the resources held by the manager.
+   */
+  dispose(): void {
+    if (this.isDisposed) {
+      return;
+    }
+    this._isDisposed = true;
+    Signal.clearData(this);
+  }
+
+  /**
+   * Get a file or directory.
+   *
+   * @param path: The path to the file.
+   *
+   * @param options: The options used to fetch the file.
+   *
+   * @returns A promise which resolves with the file content.
+   */
+  get(path: string, options?: Contents.IFetchOptions): Promise<Contents.IModel> {
+    return this.resolveDrive(path).get(path, options);
+  }
+
+  /**
+   * Get an encoded download url given a file path.
+   *
+   * @param path - An absolute POSIX file path on the server.
+   *
+   * #### Notes
+   * It is expected that the path contains no relative paths,
+   * use [[ContentsManager.getAbsolutePath]] to get an absolute
+   * path if necessary.
+   */
+  getDownloadUrl(path: string): Promise<string> {
+    return this.resolveDrive(path).getDownloadUrl(path);
+  }
+
+  /**
+   * Create a new untitled file or directory in the specified directory path.
+   *
+   * @param options: The options used to create the file.
+   *
+   * @returns A promise which resolves with the created file content when the
+   *    file is created.
+   */
+  newUntitled(options: Contents.ICreateOptions = {}): Promise<Contents.IModel> {
+    let path = (options && options.path) ? options.path : '';
+    return this.resolveDrive(path).newUntitled(options);
+  }
+
+  /**
+   * Delete a file.
+   *
+   * @param path - The path to the file.
+   *
+   * @returns A promise which resolves when the file is deleted.
+   */
+  delete(path: string): Promise<void> {
+    return this.resolveDrive(path).delete(path);
+  }
+
+  /**
+   * Rename a file or directory.
+   *
+   * @param path - The original file path.
+   *
+   * @param newPath - The new file path.
+   *
+   * @returns A promise which resolves with the new file contents model when
+   *   the file is renamed.
+   */
+  rename(path: string, newPath: string): Promise<Contents.IModel> {
+    //TODO: this should be able to move between drives.
+    return this.resolveDrive(path).rename(path, newPath);
+  }
+
+  /**
+   * Save a file.
+   *
+   * @param path - The desired file path.
+   *
+   * @param options - Optional overrides to the model.
+   *
+   * @returns A promise which resolves with the file content model when the
+   *   file is saved.
+   *
+   * #### Notes
+   * Ensure that `model.content` is populated for the file.
+   */
+  save(path: string, options: Contents.IModel = {}): Promise<Contents.IModel> {
+    return this.resolveDrive(path).save(path, options);
+  }
+
+  /**
+   * Copy a file into a given directory.
+   *
+   * @param path - The original file path.
+   *
+   * @param toDir - The destination directory path.
+   *
+   * @returns A promise which resolves with the new contents model when the
+   *  file is copied.
+   *
+   * #### Notes
+   * The server will select the name of the copied file.
+   */
+  copy(fromFile: string, toDir: string): Promise<Contents.IModel> {
+    //TODO: this should be able to copy between drives.
+    return this.resolveDrive(fromFile).copy(fromFile, toDir);
+  }
+
+  /**
+   * Create a checkpoint for a file.
+   *
+   * @param path - The path of the file.
+   *
+   * @returns A promise which resolves with the new checkpoint model when the
+   *   checkpoint is created.
+   */
+  createCheckpoint(path: string): Promise<Contents.ICheckpointModel> {
+    return this.resolveDrive(path).createCheckpoint(path);
+  }
+
+  /**
+   * List available checkpoints for a file.
+   *
+   * @param path - The path of the file.
+   *
+   * @returns A promise which resolves with a list of checkpoint models for
+   *    the file.
+   */
+  listCheckpoints(path: string): Promise<Contents.ICheckpointModel[]> {
+    return this.resolveDrive(path).listCheckpoints(path);
+  }
+
+  /**
+   * Restore a file to a known checkpoint state.
+   *
+   * @param path - The path of the file.
+   *
+   * @param checkpointID - The id of the checkpoint to restore.
+   *
+   * @returns A promise which resolves when the checkpoint is restored.
+   */
+  restoreCheckpoint(path: string, checkpointID: string): Promise<void> {
+    return this.resolveDrive(path).restoreCheckpoint(path, checkpointID);
+  }
+
+  /**
+   * Delete a checkpoint for a file.
+   *
+   * @param path - The path of the file.
+   *
+   * @param checkpointID - The id of the checkpoint to delete.
+   *
+   * @returns A promise which resolves when the checkpoint is deleted.
+   */
+  deleteCheckpoint(path: string, checkpointID: string): Promise<void> {
+    return this.resolveDrive(path).deleteCheckpoint(path, checkpointID);
+  }
+
+  /**
+   * Given a path, determine which drive should receive requests.
+   *
+   * @param path - the path of the file.
+   *
+   * @returns the drive that matches the path.
+   */
+  resolveDrive(path: string): Contents.IDriveModel {
+    let driveName = this._driveName(path);
+    for(let drive of this._drives) {
+      if(driveName === drive.baseUrl) {
+        return drive;
+      }
+    }
+    throw new Error('Could not resolve drive for path: '+path);
+  }
+
+
+  /**
+   * Add a drive to the list of mounted filesystems.
+   *
+   * @param drive - the drive to add.
+   */
+  addDrive(drive: Contents.IDriveModel): void {
+    drive.fileChanged.connect((d, args: Contents.IChangedArgs)=>{
+      this._fileChanged.emit(args);
+    });
+    this._drives.push(drive);
+  }
+
+  /**
+   * Given a path, get the baseUrl
+   * of the drive. If none is specified,
+   * then return the name of the default drive.
+   */
+  private _driveName(path: string): string {
+    let str = path.split(':');
+    if(str.length === 1) {
+      return this._defaultDrive.baseUrl;
+    } else {
+      return str[0];
+    }
+  }
+
+  private _isDisposed = false;
+  private _fileChanged = new Signal<this, Contents.IChangedArgs>(this);
+  private _drives: Contents.IDriveModel[] = [];
+  private _defaultDrive: Contents.IDriveModel = null;
+}
+
+
+/**
+* A namespace for ContentsManager statics.
+*/
+export
 namespace ContentsManager {
+/**
+ * The options used to intialize a drive manager.
+ */
+export
+interface IOptions {
   /**
-   * The options used to intialize a contents manager.
+   * The root url of the server.
    */
-  export
-  interface IOptions {
-    /**
-     * The root url of the server.
-     */
-    baseUrl?: string;
-
-    /**
-     * The authentication token for the API.
-     */
-    token?: string;
-
-    /**
-     * The default ajax settings to use for the kernel.
-     */
-    ajaxSettings?: IAjaxSettings;
-  }
+  baseUrl?: string;
 
   /**
-   * Get the absolute POSIX path to a file on the server.
-   *
-   * @param relativePath - The relative POSIX path to the file.
-   *
-   * @param cwd - The optional POSIX current working directory.  The default is
-   *  an empty string.
-   *
-   * #### Notes
-   * Absolute path in this context is equivalent to a POSIX path without
-   * the initial `'/'` because IPEP 27 paths denote `''` as the root.
-   * If the resulting path is not contained within the server root,
-   * returns `null`, since it cannot be served.
+   * The authentication token for the API.
    */
-  export
-  function getAbsolutePath(relativePath: string, cwd = ''): string {
-    // Bail if it looks like a url.
-    let urlObj = utils.urlParse(relativePath);
-    if (urlObj.protocol) {
-      return relativePath;
-    }
-    let norm = posix.normalize(posix.join(cwd, relativePath));
-    if (norm.indexOf('../') === 0) {
-      return null;
-    }
-    return posix.resolve('/', cwd, relativePath).slice(1);
-  }
+  token?: string;
 
   /**
-   * Get the last portion of a path, similar to the Unix basename command.
+   * The default ajax settings to use for the kernel.
    */
-  export
-  function basename(path: string, ext?: string): string {
-    return posix.basename(path, ext);
-  }
+  ajaxSettings?: IAjaxSettings;
+}
 
-  /**
-   * Get the directory name of a path, similar to the Unix dirname command.
-   */
-  export
-  function dirname(path: string): string {
-    return posix.dirname(path);
+/**
+ * Get the absolute POSIX path to a file on the server.
+ *
+ * @param relativePath - The relative POSIX path to the file.
+ *
+ * @param cwd - The optional POSIX current working directory.  The default is
+ *  an empty string.
+ *
+ * #### Notes
+ * Absolute path in this context is equivalent to a POSIX path without
+ * the initial `'/'` because IPEP 27 paths denote `''` as the root.
+ * If the resulting path is not contained within the server root,
+ * returns `null`, since it cannot be served.
+ */
+export
+function getAbsolutePath(relativePath: string, cwd = ''): string {
+  // Bail if it looks like a url.
+  let urlObj = utils.urlParse(relativePath);
+  if (urlObj.protocol) {
+    return relativePath;
   }
+  let norm = posix.normalize(posix.join(cwd, relativePath));
+  if (norm.indexOf('../') === 0) {
+    return null;
+  }
+  return posix.resolve('/', cwd, relativePath).slice(1);
+}
 
-  /**
-   * Get the extension of the path.
-   *
-   * #### Notes
-   * The extension is the string from the last occurance of the `.`
-   * character to end of string in the last portion of the path.
-   * If there is no `.` in the last portion of the path, or if the first
-   * character of the basename of path [[basename]] is `.`, then an
-   * empty string is returned.
-   */
-  export
-  function extname(path: string): string {
-    return posix.extname(path);
-  }
+/**
+ * Get the last portion of a path, similar to the Unix basename command.
+ */
+export
+function basename(path: string, ext?: string): string {
+  return posix.basename(path, ext);
+}
 
-  /**
-   * Normalize a file extension to be of the type `'.foo'`.
-   *
-   * Adds a leading dot if not present and converts to lower case.
-   */
-  export
-  function normalizeExtension(extension: string): string {
-    if (extension.length > 0 && extension.indexOf('.') !== 0) {
-      extension = `.${extension}`;
-    }
-    return extension;
+/**
+ * Get the directory name of a path, similar to the Unix dirname command.
+ */
+export
+function dirname(path: string): string {
+  return posix.dirname(path);
+}
+
+/**
+ * Get the extension of the path.
+ *
+ * #### Notes
+ * The extension is the string from the last occurance of the `.`
+ * character to end of string in the last portion of the path.
+ * If there is no `.` in the last portion of the path, or if the first
+ * character of the basename of path [[basename]] is `.`, then an
+ * empty string is returned.
+ */
+export
+function extname(path: string): string {
+  return posix.extname(path);
+}
+
+/**
+ * Normalize a file extension to be of the type `'.foo'`.
+ *
+ * Adds a leading dot if not present and converts to lower case.
+ */
+export
+function normalizeExtension(extension: string): string {
+  if (extension.length > 0 && extension.indexOf('.') !== 0) {
+    extension = `.${extension}`;
   }
+  return extension;
+}
 }

@@ -14,7 +14,7 @@ import {
 } from '@phosphor/signaling';
 
 import {
-  Contents, ContentsManager
+  Contents, ContentsManager, DefaultDrive
 } from './contents';
 
 import {
@@ -47,8 +47,9 @@ class ServiceManager implements ServiceManager.IManager {
     options.wsUrl = options.wsUrl || getWsUrl();
     options.baseUrl = options.baseUrl || getBaseUrl();
     options.ajaxSettings = ajaxSettingsWithToken(options.ajaxSettings, options.token);
+    let driveModel = new DefaultDrive(options);
     this._sessionManager = new SessionManager(options);
-    this._contentsManager = new ContentsManager(options);
+    this._contentsManager = new ContentsManager(driveModel);
     this._terminalManager = new TerminalManager(options);
     this._sessionManager.specsChanged.connect((sender, specs) => {
       this._specsChanged.emit(specs);
